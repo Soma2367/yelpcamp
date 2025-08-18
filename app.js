@@ -1,10 +1,16 @@
 const express = require('express');
 const path = require('path');
 const ejsMate = require('ejs-mate');
+const Joi = require('joi');
+const { campgroundSchema } = require('./schemas');
+const catchAsync = require('./utils/catchAsync');
 const mongoose = require('mongoose');
 const morgan = require('morgan');
 const methodOverride = require("method-override");
 const Campground = require('./models/campground');
+const ExpressError = require('./utils/ExpressError'); 
+const { title } = require('process');
+const { descriptors } = require('./seeds/seedHelpers');
 
 main().catch(err => {
     console.log('MongoDBコネクションエラー!!');
@@ -12,9 +18,11 @@ main().catch(err => {
 });
 
 async function main() {
-  await mongoose.connect('mongodb://127.0.0.1:27017/yelp-camp',
-  console.log('MongoDBコネクションOK!!')
-);
+    await mongoose.connect('mongodb://127.0.0.1:27017/yelp-camp', {
+        useNewUrlParser: true,
+        useUnifiedTopology: true
+    });
+    console.log('MongoDBコネクションOK!!');
 }
 
 const app = express();
@@ -27,45 +35,67 @@ app.use(express.urlencoded({extended: true}));
 app.use(methodOverride('_method'));
 app.use(morgan('tiny'));
 
+const validateCampground = (req, res, next) => {
+    const { error } = campgroundSchema.validate(req.body);
+    if(error) {
+        const msg = error.details.map(detail => detail.message).join(',');
+        throw new ExpressError(msg, 400)
+    } else {
+        next();
+    }
+}
+
 app.get('/', (req, res) => {
     res.render('home');
 });
 
-app.get('/campgrounds', async (req, res) => {
+app.get('/campgrounds', catchAsync(async (req, res) => {
     const campgrounds = await Campground.find({});
     res.render('campgrounds/index', {campgrounds});
-});
+}));
 
 app.get('/campgrounds/new', (req, res) => {
     res.render('campgrounds/new');
 });
 
-app.get('/campgrounds/:id', async (req, res) => {
-    const campground = await Campground.findById(req.params.id);
-    res.render('campgrounds/show', { campground });
-});
-
-app.post('/campgrounds', async (req, res) => {
+app.post('/campgrounds', validateCampground, catchAsync(async (req, res) => {
     const campground = new Campground(req.body.campground);
     await campground.save();
     res.redirect(`/campgrounds/${campground._id}`);
-});
+}));
 
-app.get('/campgrounds/:id/edit', async (req, res) => {
+app.get('/campgrounds/:id', catchAsync(async (req, res) => {
+    const campground = await Campground.findById(req.params.id);
+    res.render('campgrounds/show', { campground });
+}));
+
+app.get('/campgrounds/:id/edit', catchAsync(async (req, res) => {
     const campground = await Campground.findById(req.params.id);
     res.render('campgrounds/edit', { campground });
-});
+}));
 
-app.put('/campgrounds/:id', async (req, res) => {
+app.put('/campgrounds/:id', validateCampground, catchAsync(async (req, res) => {
     const { id } = req.params;
     const campground = await Campground.findByIdAndUpdate(id, { ...req.body.campground });
     res.redirect(`/campgrounds/${campground._id}`);
-});
+}));
 
-app.delete('/campgrounds/:id', async (req, res) => {
+app.delete('/campgrounds/:id', catchAsync(async (req, res) => {
     const { id } = req.params;
     await Campground.findByIdAndDelete(id);
     res.redirect('/campgrounds');
+}));
+
+app.all('*', (req, res, next) => {
+    next(new ExpressError('ページが見つかりませんでした。', 404));
+});
+
+app.use((err, req, res, next) => {
+    const { statusCode = 500 } = err;
+    if(!err.message) {
+        err.message = '問題が起きました'
+    }
+    res.status(statusCode).render('error', { err });
 });
 
 app.listen(3000, () => {
